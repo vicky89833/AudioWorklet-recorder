@@ -91,3 +91,106 @@ This architecture allows for:
 - Real-time audio processing without blocking the main thread
 - Thread-safe communication between main thread and audio thread
 - Efficient audio data transfer through the ports
+
+
+# AudioWorklet Usage and Control in the Recorder
+
+Let me explain how the AudioWorklet is used and managed in this audio recorder implementation:
+
+## How AudioWorklet is Used
+
+### 1. **Initialization**
+- **Loading the Processor**: 
+  ```typescript
+  await this.audioContext.audioWorklet.addModule('src/audio-processor.js');
+  ```
+  This loads the AudioWorklet processor script into the audio context.
+
+- **Creating the Node**:
+  ```typescript
+  this.processorNode = new AudioWorkletNode(this.audioContext, 'recorder-processor');
+  ```
+  Creates an instance of the registered processor ("recorder-processor").
+
+### 2. **Audio Processing Flow**
+1. Microphone input → MediaStream
+2. MediaStream → MediaStreamSourceNode
+3. SourceNode → AudioWorkletNode (our processor)
+4. Processor sends data back via MessagePort
+
+### 3. **Real-time Audio Processing**
+The processor's `process()` method runs continuously (typically every 128-4096 samples) in a separate audio thread:
+
+```javascript
+process(inputs) {
+  if (this.stopProcessing) return false;
+  
+  const input = inputs[0];
+  if (input && input.length > 0) {
+    this.port.postMessage(input[0]);
+  }
+  return true;
+}
+```
+
+## How AudioWorklet is Stopped
+
+There are several ways the AudioWorklet processing is stopped:
+
+### 1. **Explicit Stop Command**
+```typescript
+this.processorNode.port.postMessage('stop');
+```
+This sends a message to the processor to set `stopProcessing = true`, causing the next `process()` call to return `false` and terminate the processor.
+
+### 2. **Disconnecting Nodes**
+```typescript
+this.processorNode.disconnect();
+```
+Removes the processor from the audio graph, stopping audio flow.
+
+### 3. **Closing AudioContext**
+```typescript
+this.audioContext.close();
+```
+Stops all audio processing in the context, including all worklet processors.
+
+### 4. **Stopping MediaStream Tracks**
+```typescript
+this.mediaStream.getTracks().forEach(track => track.stop());
+```
+Stops the source of audio data, which eventually stops the processor since no new data arrives.
+
+## Key Lifecycle Points
+
+1. **Start**:
+   - Create AudioContext
+   - Get microphone permission
+   - Load and initialize AudioWorklet
+   - Connect audio nodes
+
+2. **Processing**:
+   - Audio data flows continuously
+   - Processor sends chunks to main thread
+   - Main thread collects chunks
+
+3. **Stop**:
+   - Send stop message
+   - Disconnect nodes
+   - Close context
+   - Stop media tracks
+
+4. **Cleanup**:
+   - Release resources
+   - Generate WAV file
+   - Update UI
+
+## Threading Considerations
+
+- **AudioWorklet runs in a separate audio rendering thread** (not main thread)
+- **MessagePort communication is asynchronous** between threads
+- **Audio processing must be real-time** (no blocking operations)
+- **The processor can be stopped from either thread** (main thread via disconnect, or audio thread by returning false)
+
+This implementation provides a robust way to record audio with proper start/stop control while maintaining low latency through the AudioWorklet API.
+
